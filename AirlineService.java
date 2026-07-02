@@ -100,13 +100,54 @@ public class AirlineService {
         }
 
         String passengerId = generatePassengerId();
-        Passenger passenger = new Passenger(passengerId, passengerName, email, phone);
+        Passenger passenger = Passenger.create(passengerId, passengerName, email, phone, "", "Adult", "Any", "Economy");
         passengers.put(passengerId, passenger);
 
         String reservationId = generateReservationId();
-        Reservation reservation = Reservation.create(reservationId, flight, passenger, seats);
+        double totalPrice = flight.getPrice() * seats;
+        Reservation reservation = Reservation.create(reservationId, flight, passenger, seats, totalPrice, null, "Unknown");
         reservations.put(reservationId, reservation);
         return reservation;
+    }
+
+    public Reservation bookFlightForPassenger(String flightNumber, String userId, String passengerName, String email, String phone, String passportNumber, String passengerType, String seatPreference, String travelClass, String paymentMethod) {
+        User user = getUserById(userId);
+        if (user == null || !user.isCustomer()) {
+            throw new IllegalArgumentException("Invalid customer account.");
+        }
+        Flight flight = findFlightByNumber(flightNumber);
+        if (flight == null) {
+            throw new IllegalArgumentException("Flight not found: " + flightNumber);
+        }
+        if (!flight.reserveSeats(1)) {
+            throw new IllegalArgumentException("Not enough seats available for this flight.");
+        }
+        String normalizedEmail = email == null ? "" : email.trim().toLowerCase();
+        String normalizedPhone = phone == null ? "" : phone.trim();
+        String normalizedPassport = passportNumber == null ? "" : passportNumber.trim();
+        String normalizedPassengerType = passengerType == null || passengerType.isBlank() ? "Adult" : passengerType.trim();
+        String normalizedSeatPreference = seatPreference == null || seatPreference.isBlank() ? "Aisle" : seatPreference.trim();
+        String normalizedTravelClass = travelClass == null || travelClass.isBlank() ? "Economy" : travelClass.trim();
+        String normalizedPaymentMethod = paymentMethod == null || paymentMethod.isBlank() ? "Mpesa" : paymentMethod.trim();
+
+        String passengerId = generatePassengerId();
+        Passenger passenger = Passenger.create(passengerId, passengerName.trim(), normalizedEmail, normalizedPhone, normalizedPassport, normalizedPassengerType, normalizedSeatPreference, normalizedTravelClass);
+        passengers.put(passengerId, passenger);
+
+        double classMultiplier = travelClassMultiplier(normalizedTravelClass);
+        double totalPrice = flight.getPrice() * classMultiplier;
+        String reservationId = generateReservationId();
+        Reservation reservation = Reservation.create(reservationId, flight, passenger, 1, totalPrice, userId, normalizedPaymentMethod);
+        reservations.put(reservationId, reservation);
+        return reservation;
+    }
+
+    private double travelClassMultiplier(String travelClass) {
+        return switch (travelClass.toLowerCase()) {
+            case "business" -> 1.5;
+            case "first", "first class" -> 2.0;
+            default -> 1.0;
+        };
     }
 
     public boolean cancelReservation(String reservationId) {
@@ -138,7 +179,7 @@ public class AirlineService {
             throw new IllegalArgumentException("An account already exists with that email.");
         }
         String passengerId = generatePassengerId();
-        Passenger passenger = new Passenger(passengerId, name.trim(), normalizedEmail, phone == null ? "" : phone.trim());
+        Passenger passenger = Passenger.create(passengerId, name.trim(), normalizedEmail, phone == null ? "" : phone.trim(), "", "Adult", "Any", "Economy");
         passengers.put(passengerId, passenger);
 
         String userId = generateUserId();
@@ -189,11 +230,9 @@ public class AirlineService {
         if (user.isAdmin()) {
             return getAllReservations();
         }
-        if (user.passengerId() == null) {
-            return new ArrayList<>();
-        }
         return reservations.values().stream()
-                .filter(r -> r.passenger().id().equals(user.passengerId()))
+                .filter(r -> r.bookedByUserId() != null && r.bookedByUserId().equals(user.id())
+                        || (user.passengerId() != null && r.passenger().id().equals(user.passengerId())))
                 .collect(Collectors.toList());
     }
 
@@ -220,7 +259,8 @@ public class AirlineService {
             throw new IllegalStateException("Passenger profile missing for user.");
         }
         String reservationId = generateReservationId();
-        Reservation reservation = Reservation.create(reservationId, flight, passenger, seats);
+        double totalPrice = flight.getPrice() * seats;
+        Reservation reservation = Reservation.create(reservationId, flight, passenger, seats, totalPrice, userId, "Unknown");
         reservations.put(reservationId, reservation);
         return reservation;
     }
@@ -234,7 +274,9 @@ public class AirlineService {
         if (user == null) {
             return false;
         }
-        boolean allowed = user.isAdmin() || (user.isCustomer() && user.passengerId() != null && reservation.passenger().id().equals(user.passengerId()));
+        boolean allowed = user.isAdmin()
+                || (user.isCustomer() && (reservation.bookedByUserId() != null && reservation.bookedByUserId().equals(userId)))
+                || (user.isCustomer() && user.passengerId() != null && reservation.passenger().id().equals(user.passengerId()));
         if (!allowed) {
             return false;
         }
@@ -296,6 +338,10 @@ public class AirlineService {
 
     public List<Reservation> getAllReservations() {
         return new ArrayList<>(reservations.values());
+    }
+
+    public Flight getFlightByNumber(String flightNumber) {
+        return findFlightByNumber(flightNumber);
     }
 
     public int getTotalFlightCount() {
