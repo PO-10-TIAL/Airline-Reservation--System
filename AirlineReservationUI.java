@@ -50,6 +50,7 @@ public class AirlineReservationUI {
     private JButton confirmBookingButton;
     private JLabel passengerCounterLabel;
     private final java.util.List<BookingPassenger> pendingPassengers = new java.util.ArrayList<>();
+    private JTabbedPane customerTabbedPane;
 
     private DefaultTableModel adminFlightTableModel;
     private DefaultTableModel adminReservationTableModel;
@@ -66,6 +67,10 @@ public class AirlineReservationUI {
     private JLabel overviewCustomersLabel;
     private JLabel overviewReservationsLabel;
     private JLabel overviewSeatsLabel;
+    private JLabel topFlightsLabel;
+    private JLabel topCustomersLabel;
+    private JLabel topReservationsLabel;
+    private JLabel topSeatsLabel;
     private JButton adminFlightButton;
     private JButton adminReservationButton;
     private JButton adminCustomerButton;
@@ -192,15 +197,31 @@ public class AirlineReservationUI {
 
         JPanel formPanel = new JPanel(new GridBagLayout());
         formPanel.setOpaque(false);
-        customerLoginEmailField = new JTextField(18);
-        customerLoginPasswordField = new JPasswordField(18);
-        addFormField(formPanel, "Email address", customerLoginEmailField, 0);
-        addFormField(formPanel, "Password", customerLoginPasswordField, 1);
+        JTextField welcomeEmailField = new JTextField(18);
+        JPasswordField welcomePasswordField = new JPasswordField(18);
+        addFormField(formPanel, "Email address", welcomeEmailField, 0);
+        addFormField(formPanel, "Password", welcomePasswordField, 1);
 
         JButton loginButton = new JButton("Sign in");
         applyButtonStyle(loginButton, new Color(0, 122, 204));
         loginButton.setPreferredSize(new Dimension(280, 48));
-        loginButton.addActionListener(this::handleCustomerLogin);
+        loginButton.addActionListener(e -> {
+            try {
+                String email = welcomeEmailField.getText().trim();
+                String password = new String(welcomePasswordField.getPassword());
+                currentUser = service.authenticate(email, password);
+                if (!currentUser.isCustomer()) {
+                    throw new IllegalArgumentException("Please login with a customer account.");
+                }
+                refreshCustomerFlightTable(service.getAllFlights());
+                refreshCustomerReservationTable();
+                prefillCustomerDetails();
+                setStatus("Welcome, " + currentUser.name() + "!");
+                switchToCard(CARD_CUSTOMER_DASHBOARD);
+            } catch (IllegalArgumentException ex) {
+                showMessage("Login failed", ex.getMessage(), JOptionPane.ERROR_MESSAGE);
+            }
+        });
 
         JButton cardRegisterLink = createTextLinkButton("Create account");
         cardRegisterLink.setFont(new Font("Segoe UI", Font.BOLD, 13));
@@ -405,13 +426,14 @@ public class AirlineReservationUI {
         topBar.add(logoutButton, BorderLayout.EAST);
         topBar.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
 
-        JTabbedPane tabbedPane = new JTabbedPane();
-        tabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        tabbedPane.addTab("Search Flights", createCustomerSearchPanel());
-        tabbedPane.addTab("My Reservations", createCustomerReservationsPanel());
+        customerTabbedPane = new JTabbedPane();
+        customerTabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        customerTabbedPane.addTab("Search Flights", createCustomerSearchPanel());
+        customerTabbedPane.addTab("Book a Flight", createCustomerBookingPanel());
+        customerTabbedPane.addTab("My Reservations", createCustomerReservationsPanel());
 
         panel.add(topBar, BorderLayout.NORTH);
-        panel.add(tabbedPane, BorderLayout.CENTER);
+        panel.add(customerTabbedPane, BorderLayout.CENTER);
         return panel;
     }
 
@@ -439,8 +461,13 @@ public class AirlineReservationUI {
         configureTable(flightTable);
         flightTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting() && flightTable.getSelectedRow() >= 0) {
-                bookingFlightNumberField.setText(customerFlightTableModel.getValueAt(flightTable.getSelectedRow(), 0).toString());
-                setStatus("Selected flight " + bookingFlightNumberField.getText() + ".");
+                String selectedFlight = customerFlightTableModel.getValueAt(flightTable.getSelectedRow(), 0).toString();
+                bookingFlightNumberField.setText(selectedFlight);
+                prefillCustomerDetails();
+                setStatus("Selected flight " + selectedFlight + ". Ready to book.");
+                if (customerTabbedPane != null) {
+                    customerTabbedPane.setSelectedIndex(1);
+                }
             }
         });
 
@@ -455,14 +482,24 @@ public class AirlineReservationUI {
         });
         refreshButton.addActionListener(e -> refreshCustomerFlightTable(service.getAllFlights()));
 
+        panel.add(searchPanel, BorderLayout.NORTH);
+        panel.add(new JScrollPane(flightTable), BorderLayout.CENTER);
+
+        refreshCustomerFlightTable(service.getAllFlights());
+        return panel;
+    }
+
+    private JPanel createCustomerBookingPanel() {
+        JPanel panel = createContentPanel();
+
         JPanel bookingPanel = new JPanel(new GridBagLayout());
         bookingPanel.setOpaque(false);
-        bookingPanel.setBorder(BorderFactory.createTitledBorder(BorderFactory.createLineBorder(new Color(200, 211, 222), 1), "Group Booking Details"));
+        bookingPanel.setBorder(BorderFactory.createTitledBorder(BorderFactory.createLineBorder(new Color(200, 211, 222), 1), "Booking Details"));
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(10, 10, 10, 10);
+        gbc.insets = new Insets(6, 10, 6, 10);
         gbc.anchor = GridBagConstraints.WEST;
 
-        bookingFlightNumberField = new JTextField(12);
+        bookingFlightNumberField = new JTextField(14);
         bookingFlightNumberField.setEditable(false);
         bookingSeatsField = new JTextField(6);
         bookingSeatsField.setEnabled(false);
@@ -502,7 +539,7 @@ public class AirlineReservationUI {
         addPassengerButton.addActionListener(e -> handleAddPassenger());
         confirmBookingButton.addActionListener(e -> handleConfirmGroupBooking());
 
-        JPanel buttonBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 12, 0));
+        JPanel buttonBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 12, 8));
         buttonBar.setOpaque(false);
         buttonBar.add(addPassengerButton);
         buttonBar.add(confirmBookingButton);
@@ -511,18 +548,20 @@ public class AirlineReservationUI {
         pendingPassengerTableModel = new DefaultTableModel(new Object[]{"Name", "Type", "Passport", "Seat", "Class"}, 0);
         JTable pendingTable = new JTable(pendingPassengerTableModel);
         configureTable(pendingTable);
-        pendingTable.setPreferredScrollableViewportSize(new Dimension(0, 140));
+        pendingTable.setPreferredScrollableViewportSize(new Dimension(0, 160));
 
-        JPanel bookingContainer = new JPanel(new BorderLayout(12, 12));
-        bookingContainer.setOpaque(false);
-        bookingContainer.add(bookingPanel, BorderLayout.NORTH);
-        bookingContainer.add(new JScrollPane(pendingTable), BorderLayout.CENTER);
+        JPanel formWrapper = new JPanel(new BorderLayout(0, 10));
+        formWrapper.setOpaque(false);
+        formWrapper.add(bookingPanel, BorderLayout.NORTH);
+        formWrapper.add(new JScrollPane(pendingTable), BorderLayout.CENTER);
 
-        panel.add(searchPanel, BorderLayout.NORTH);
-        panel.add(new JScrollPane(flightTable), BorderLayout.CENTER);
-        panel.add(bookingContainer, BorderLayout.EAST);
+        JScrollPane pageScroll = new JScrollPane(formWrapper);
+        pageScroll.setBorder(BorderFactory.createEmptyBorder());
+        pageScroll.setOpaque(false);
+        pageScroll.getViewport().setOpaque(false);
+        pageScroll.getVerticalScrollBar().setUnitIncrement(16);
 
-        refreshCustomerFlightTable(service.getAllFlights());
+        panel.add(pageScroll, BorderLayout.CENTER);
         return panel;
     }
 
@@ -547,6 +586,7 @@ public class AirlineReservationUI {
             if (service.cancelReservation(reservationId, currentUser.id())) {
                 refreshCustomerReservationTable();
                 refreshCustomerFlightTable(service.getAllFlights());
+                refreshOverview();
                 showMessage("Success", "Reservation cancelled successfully.", JOptionPane.INFORMATION_MESSAGE);
                 setStatus("Reservation " + reservationId + " cancelled.");
                 cancelReservationField.setText("");
@@ -597,14 +637,14 @@ public class AirlineReservationUI {
 
         JPanel summaryPanel = new JPanel(new GridLayout(1, 4, 18, 18));
         summaryPanel.setOpaque(false);
-        overviewFlightsLabel = overviewCard("Flights", "0", Color.WHITE, new Color(0, 102, 204));
-        overviewCustomersLabel = overviewCard("Customers", "0", Color.WHITE, new Color(33, 150, 243));
-        overviewReservationsLabel = overviewCard("Reservations", "0", Color.WHITE, new Color(0, 150, 136));
-        overviewSeatsLabel = overviewCard("Available Seats", "0", Color.WHITE, new Color(220, 20, 60));
-        summaryPanel.add(overviewFlightsLabel);
-        summaryPanel.add(overviewCustomersLabel);
-        summaryPanel.add(overviewReservationsLabel);
-        summaryPanel.add(overviewSeatsLabel);
+        topFlightsLabel = overviewCard("Flights", "0", Color.WHITE, new Color(0, 102, 204));
+        topCustomersLabel = overviewCard("Customers", "0", Color.WHITE, new Color(33, 150, 243));
+        topReservationsLabel = overviewCard("Reservations", "0", Color.WHITE, new Color(0, 150, 136));
+        topSeatsLabel = overviewCard("Available Seats", "0", Color.WHITE, new Color(220, 20, 60));
+        summaryPanel.add(topFlightsLabel);
+        summaryPanel.add(topCustomersLabel);
+        summaryPanel.add(topReservationsLabel);
+        summaryPanel.add(topSeatsLabel);
 
         JPanel sideNav = new JPanel();
         sideNav.setLayout(new BoxLayout(sideNav, BoxLayout.Y_AXIS));
@@ -682,8 +722,14 @@ public class AirlineReservationUI {
                 adminDestinationField.setText(adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 2).toString());
                 adminDepartField.setText(adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 3).toString());
                 adminArriveField.setText(adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 4).toString());
-                String seatsText = adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 5).toString();
-                adminSeatsField.setText(seatsText.split("/")[0]);
+                String selectedFlightNumber = adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 0).toString();
+                Flight f = service.getFlightByNumber(selectedFlightNumber);
+                if (f != null) {
+                    adminSeatsField.setText(String.valueOf(f.getTotalSeats()));
+                } else {
+                    String seatsText = adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 5).toString();
+                    adminSeatsField.setText(seatsText.contains("/") ? seatsText.split("/")[1] : seatsText);
+                }
                 adminPriceField.setText(adminFlightTableModel.getValueAt(flightTable.getSelectedRow(), 6).toString().replace("KSh ", ""));
             }
         });
@@ -695,13 +741,16 @@ public class AirlineReservationUI {
         gbc.insets = new Insets(10, 10, 10, 10);
         gbc.anchor = GridBagConstraints.WEST;
 
-        adminFlightNumberField = new JTextField(12);
-        adminOriginField = new JTextField(12);
-        adminDestinationField = new JTextField(12);
-        adminDepartField = new JTextField(10);
-        adminArriveField = new JTextField(10);
-        adminSeatsField = new JTextField(6);
-        adminPriceField = new JTextField(8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+
+        adminFlightNumberField = new JTextField(20);
+        adminOriginField = new JTextField(20);
+        adminDestinationField = new JTextField(20);
+        adminDepartField = new JTextField(20);
+        adminArriveField = new JTextField(20);
+        adminSeatsField = new JTextField(20);
+        adminPriceField = new JTextField(20);
 
         addFieldToPanel(formPanel, labelWithFont("Flight #:"), adminFlightNumberField, gbc, 0);
         addFieldToPanel(formPanel, labelWithFont("Origin:"), adminOriginField, gbc, 1);
@@ -866,6 +915,7 @@ public class AirlineReservationUI {
             }
             refreshCustomerFlightTable(service.getAllFlights());
             refreshCustomerReservationTable();
+            prefillCustomerDetails();
             setStatus("Welcome, " + currentUser.name() + "!");
             switchToCard(CARD_CUSTOMER_DASHBOARD);
         } catch (IllegalArgumentException ex) {
@@ -883,6 +933,7 @@ public class AirlineReservationUI {
             showMessage("Registered", "Customer account created successfully. Welcome, " + currentUser.name() + "!", JOptionPane.INFORMATION_MESSAGE);
             refreshCustomerFlightTable(service.getAllFlights());
             refreshCustomerReservationTable();
+            prefillCustomerDetails();
             switchToCard(CARD_CUSTOMER_DASHBOARD);
             clearRegisterForm();
             setStatus("Logged in as " + currentUser.name() + ".");
@@ -931,6 +982,20 @@ public class AirlineReservationUI {
         // legacy booking method not used in new customer workflow
     }
 
+    private void prefillCustomerDetails() {
+        if (currentUser != null && currentUser.isCustomer()) {
+            if (passengerNameField != null && passengerNameField.getText().trim().isEmpty()) {
+                passengerNameField.setText(currentUser.name());
+            }
+            if (passengerEmailField != null && passengerEmailField.getText().trim().isEmpty()) {
+                passengerEmailField.setText(currentUser.email());
+            }
+            if (passengerPhoneField != null && passengerPhoneField.getText().trim().isEmpty()) {
+                passengerPhoneField.setText(currentUser.phone());
+            }
+        }
+    }
+
     private void handleAddPassenger() {
         if (currentUser == null || !currentUser.isCustomer()) {
             showMessage("Not logged in", "Please login as a customer before adding passengers.", JOptionPane.WARNING_MESSAGE);
@@ -942,16 +1007,31 @@ public class AirlineReservationUI {
             return;
         }
         String name = passengerNameField.getText().trim();
+        if (name.isEmpty() && currentUser != null) {
+            name = currentUser.name();
+            passengerNameField.setText(name);
+        }
         String email = passengerEmailField.getText().trim();
+        if (email.isEmpty() && currentUser != null) {
+            email = currentUser.email();
+            passengerEmailField.setText(email);
+        }
         String phone = passengerPhoneField.getText().trim();
+        if (phone.isEmpty() && currentUser != null) {
+            phone = currentUser.phone();
+            passengerPhoneField.setText(phone);
+        }
         String passport = passengerPassportField.getText().trim();
+        if (passport.isEmpty()) {
+            passport = "N/A";
+        }
         String type = (String) passengerTypeCombo.getSelectedItem();
         String seat = (String) seatPreferenceCombo.getSelectedItem();
         String travelClass = (String) travelClassCombo.getSelectedItem();
         String paymentMethod = (String) paymentMethodCombo.getSelectedItem();
 
-        if (name.isEmpty() || passport.isEmpty() || type == null || seat == null || travelClass == null || paymentMethod == null) {
-            showMessage("Validation error", "Please complete all passenger fields before adding.", JOptionPane.WARNING_MESSAGE);
+        if (name.isEmpty() || type == null || seat == null || travelClass == null || paymentMethod == null) {
+            showMessage("Validation error", "Please complete all required passenger fields (Name, Type, Seat, Class, Payment) before adding.", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
@@ -985,8 +1065,14 @@ public class AirlineReservationUI {
         int expectedAdults = (Integer) passengerAdultCountSpinner.getValue();
         int expectedChildren = (Integer) passengerChildCountSpinner.getValue();
         int expectedTotal = expectedAdults + expectedChildren;
+
+        // Auto-add current form passenger if pending list is empty
+        if (pendingPassengers.isEmpty()) {
+            handleAddPassenger();
+        }
+
         if (pendingPassengers.size() != expectedTotal) {
-            showMessage("Incomplete passenger list", "Please add details for all passengers before finalizing.", JOptionPane.WARNING_MESSAGE);
+            showMessage("Incomplete passenger list", "Please add details for all " + expectedTotal + " passenger(s) before finalizing.", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
@@ -1022,6 +1108,7 @@ public class AirlineReservationUI {
         refreshCustomerReservationTable();
         refreshAdminReservationTable();
         refreshAdminFlightTable();
+        refreshOverview();
 
         showMessage("Booking complete", String.format("All %d passengers are booked. Total amount: KSh %.2f via %s.", expectedTotal, totalCost, selectedPaymentMethod), JOptionPane.INFORMATION_MESSAGE);
         setStatus("Completed group booking for " + expectedTotal + " passengers.");
@@ -1158,7 +1245,7 @@ public class AirlineReservationUI {
                     flight.getDestination(),
                     flight.getDepartureTime(),
                     flight.getArrivalTime(),
-                    flight.getTotalSeats() + "/" + flight.getAvailableSeats(),
+                    flight.getAvailableSeats() + "/" + flight.getTotalSeats(),
                     String.format("KSh %.2f", flight.getPrice())
             });
         }
@@ -1191,10 +1278,25 @@ public class AirlineReservationUI {
     }
 
     private void refreshOverview() {
-        overviewFlightsLabel.setText(String.format("<html><div style='text-align:center'><span style='font-size:20pt; font-weight:bold'>%d</span><br/><span style='font-size:11pt; color:#5a5a5a'>Flights</span></div></html>", service.getTotalFlightCount()));
-        overviewCustomersLabel.setText(String.format("<html><div style='text-align:center'><span style='font-size:20pt; font-weight:bold'>%d</span><br/><span style='font-size:11pt; color:#5a5a5a'>Customers</span></div></html>", service.getTotalCustomerCount()));
-        overviewReservationsLabel.setText(String.format("<html><div style='text-align:center'><span style='font-size:20pt; font-weight:bold'>%d</span><br/><span style='font-size:11pt; color:#5a5a5a'>Reservations</span></div></html>", service.getTotalReservationCount()));
-        overviewSeatsLabel.setText(String.format("<html><div style='text-align:center'><span style='font-size:20pt; font-weight:bold'>%d</span><br/><span style='font-size:11pt; color:#5a5a5a'>Available Seats</span></div></html>", service.getAvailableSeatCount()));
+        int flights = service.getTotalFlightCount();
+        int customers = service.getTotalCustomerCount();
+        int reservations = service.getTotalReservationCount();
+        int seats = service.getAvailableSeatCount();
+
+        if (overviewFlightsLabel != null) updateOverviewCard(overviewFlightsLabel, "Flights", flights, new Color(0, 102, 204));
+        if (overviewCustomersLabel != null) updateOverviewCard(overviewCustomersLabel, "Customers", customers, new Color(33, 150, 243));
+        if (overviewReservationsLabel != null) updateOverviewCard(overviewReservationsLabel, "Reservations", reservations, new Color(0, 150, 136));
+        if (overviewSeatsLabel != null) updateOverviewCard(overviewSeatsLabel, "Available Seats", seats, new Color(220, 20, 60));
+
+        if (topFlightsLabel != null) updateOverviewCard(topFlightsLabel, "Flights", flights, new Color(0, 102, 204));
+        if (topCustomersLabel != null) updateOverviewCard(topCustomersLabel, "Customers", customers, new Color(33, 150, 243));
+        if (topReservationsLabel != null) updateOverviewCard(topReservationsLabel, "Reservations", reservations, new Color(0, 150, 136));
+        if (topSeatsLabel != null) updateOverviewCard(topSeatsLabel, "Available Seats", seats, new Color(220, 20, 60));
+    }
+
+    private void updateOverviewCard(JLabel label, String title, int count, Color accent) {
+        label.setText(String.format("<html><div style='text-align:center'><span style='font-size:22pt; font-weight:bold; color:%s'>%d</span><br/><span style='font-size:12pt; color:#4a4a4a'>%s</span></div></html>",
+                toHexString(accent), count, title));
     }
 
     private void switchToCard(String cardName) {
